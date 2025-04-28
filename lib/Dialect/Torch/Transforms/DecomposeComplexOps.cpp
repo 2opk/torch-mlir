@@ -5553,6 +5553,10 @@ public:
     }
 
     Value gradWeight = cstNone;
+    int64_t numGroups;
+    if (!matchPattern(op.getGroups(), m_TorchConstantInt(&numGroups)))
+      return rewriter.notifyMatchFailure(op,
+                                         "only constant group size supported.");
     if (outMask[1]) {
       // Computing Grad Weight.
       Type transposedType;
@@ -5719,7 +5723,7 @@ public:
                                   0, 1, transposedType)))
           return failure();
         gradWeight = rewriter.create<Torch::AtenConvolutionOp>(
-            loc, transposedType, inputTransposed, gradOutputTransposed, cstNone,
+            loc, transposedType, numGroups == 1 ? inputTransposed : input, gradOutputTransposed, cstNone,
             op.getStride(), op.getPadding(), op.getDilation(),
             op.getTransposed(), op.getOutputPadding(), op.getGroups());
         gradWeight = rewriter.create<Torch::AtenTransposeIntOp>(

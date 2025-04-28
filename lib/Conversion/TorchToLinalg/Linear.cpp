@@ -1291,11 +1291,22 @@ public:
     if (inShape[1] == numGroups && weightShape[0] == numGroups &&
         weightShape[1] == 1) {
       // Collapse weight shape (C/G == 1)
-      SmallVector<ReassociationIndices> collapsedDims = {{0, 1}};
-      SmallVector<int64_t> collapsedShape{weightShape[0] * weightShape[1]};
-      for (unsigned i = 0; i < numSpatialDims; i++) {
-        collapsedDims.push_back({i + 2});
-        collapsedShape.push_back(weightShape[i + 2]);
+      SmallVector<ReassociationIndices> collapsedDims;
+      SmallVector<int64_t> collapsedShape;
+      if (transposed) {
+        collapsedDims.push_back({0, 1, 2});
+        collapsedShape.push_back(weightShape[0] * weightShape[1] * weightShape[2]);
+        for (unsigned i = 0; i < numSpatialDims; i++) {
+          collapsedDims.push_back({i + 3});
+          collapsedShape.push_back(weightShape[i + 3]);
+        }
+      } else {
+        collapsedDims.push_back({0, 1});
+        collapsedShape.push_back(weightShape[0] * weightShape[1]);
+        for (unsigned i = 0; i < numSpatialDims; i++) {
+          collapsedDims.push_back({i + 2});
+          collapsedShape.push_back(weightShape[i + 2]);
+        }
       }
       Type collapsedType = RankedTensorType::get(
           makeShapeLLVMCompatible(collapsedShape), weightDTy);

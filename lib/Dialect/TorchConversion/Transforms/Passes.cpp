@@ -102,6 +102,7 @@ void TorchConversion::createTorchBackendToLinalgOnTensorsBackendPipeline(
   // linalg-on-tensors backend contract.
   pm.addPass(TorchConversion::createFuncBackendTypeConversionPass());
   pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createConvertTorchToArithPass());
   pm.addNestedPass<func::FuncOp>(
       TorchConversion::createFinalizingBackendTypeConversionPass());
 

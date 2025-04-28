@@ -18,6 +18,7 @@
 #include "torch-mlir/Dialect/TorchConversion/IR/TorchConversionOps.h"
 #include "torch-mlir/Dialect/TorchConversion/Transforms/BackendTypeConversion.h"
 #include "torch-mlir/Dialect/TorchConversion/Transforms/Passes.h"
+#include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 
 using namespace mlir;
 using namespace mlir::torch;
@@ -193,6 +194,37 @@ static void stripTorchAttrs(FunctionOpInterface func) {
   // Note: this could also strip "arg" and "result" attrs if they were used.
 }
 
+template <typename OpTy>
+class ConvertTorchConstantOp : public OpConversionPattern<OpTy> {
+public:
+  using OpConversionPattern<OpTy>::OpConversionPattern;
+  using OpAdaptor = typename OpTy::Adaptor;
+  LogicalResult
+  matchAndRewrite(OpTy op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, op.getValueAttr());
+    return success();
+  }
+};
+
+class ConvertTorchConstantIntOp
+    : public OpConversionPattern<Torch::ConstantIntOp> {
+public:
+  using OpConversionPattern<Torch::ConstantIntOp>::OpConversionPattern;
+  using OpAdaptor = Torch::ConstantIntOp::Adaptor;
+  LogicalResult
+  matchAndRewrite(Torch::ConstantIntOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // note: arith.constant only accept signless integer, so convert signed to
+    // signless
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, rewriter.getIntegerAttr(rewriter.getI64Type(),
+                                    op.getValueAttr().getValue()));
+    return success();
+  }
+};
+
+
 namespace {
 struct FinalizingBackendTypeConversionPass
     : public FinalizingBackendTypeConversionBase<
@@ -207,6 +239,13 @@ struct FinalizingBackendTypeConversionPass
     TypeConverter typeConverter;
     RewritePatternSet patterns(context);
     ConversionTarget target(*context);
+
+    target.addIllegalOp<mlir::torch::Torch::ConstantBoolOp>();
+    patterns.add<ConvertTorchConstantOp<mlir::torch::Torch::ConstantBoolOp>>(typeConverter,
+                                                         context);
+
+    target.addIllegalOp<mlir::torch::Torch::ConstantIntOp>();
+    patterns.add<ConvertTorchConstantIntOp>(typeConverter, context);
 
     typeConverter.addConversion([](Type type) { return type; });
     TorchConversion::setupBackendTypeConversion(target, typeConverter);

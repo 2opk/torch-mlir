@@ -97,52 +97,7 @@ sudo apt install clang ccache lld
 
 Two setups are possible to build: in-tree and out-of-tree. The in-tree setup is the most straightforward, as it will build LLVM dependencies as well.
 
-##### ...with LLVM "in-tree" using...
-
-The following commands generate configuration files to build the project *in-tree*, that is, using llvm/llvm-project as the main build. This will build LLVM as well as torch-mlir and its subprojects.
-
-###### ...Base + Optimization Options
-
-If you do anticipate needing to frequently rebuild LLVM "in-tree", run:
-
-```shell
-cmake -GNinja -Bbuild \
-  `# Enables "--debug" and "--debug-only" flags for the "torch-mlir-opt" tool` \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DPython3_FIND_VIRTUALENV=ONLY \
-  -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
-  -DLLVM_TARGETS_TO_BUILD=host \
-  `# For building LLVM "in-tree"` \
-  externals/llvm-project/llvm \
-  -DLLVM_ENABLE_PROJECTS=mlir \
-  -DLLVM_EXTERNAL_PROJECTS="torch-mlir" \
-  -DLLVM_EXTERNAL_TORCH_MLIR_SOURCE_DIR="$PWD" \
-  `# use clang`\
-  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  `# use ccache to cache build results` \
-  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-  `# use LLD to link in seconds, rather than minutes` \
-  `# if using clang <= 13, replace --ld-path=ld.lld with -fuse-ld=lld` \
-  -DCMAKE_EXE_LINKER_FLAGS_INIT="--ld-path=ld.lld" \
-  -DCMAKE_MODULE_LINKER_FLAGS_INIT="--ld-path=ld.lld" \
-  -DCMAKE_SHARED_LINKER_FLAGS_INIT="--ld-path=ld.lld" \
-  `# Enabling libtorch binary cache instead of downloading the latest libtorch everytime.` \
-  `# Testing against a mismatched version of libtorch may cause failures` \
-  -DLIBTORCH_CACHE=ON \
-  `# Enable an experimental path to build libtorch (and PyTorch wheels) from source,` \
-  `# instead of downloading them` \
-  -DLIBTORCH_SRC_BUILD=ON \
-  `# Set the variant of libtorch to build / link against. (shared|static and optionally cxxabi11)` \
-  -DLIBTORCH_VARIANT=shared
-```
-
-- This will build `libtorch` / `PyTorch` wheels from source and requires [the enablement mentioned earlier](#optional-enable-quicker-builds).
-- If you encounter issues when you run this, try the [simplified build command](#base-options) instead.
-
-###### ...Base Options
-
-If you don't anticipate needing to frequently rebuild LLVM "in-tree", run:
+##### ...with LLVM "in-tree"
 
 ```shell
 cmake -GNinja -Bbuild \
@@ -159,10 +114,12 @@ cmake -GNinja -Bbuild \
   -DLLVM_EXTERNAL_TORCH_MLIR_SOURCE_DIR="$PWD"
 ```
 
+- NOTE: uses external/llvm-project/llvm as the main build, so LLVM will be built in addition to torch-mlir and its sub-projects.
 
 ##### ...with LLVM "out-of-tree"
 
 If you have built llvm-project separately in the directory `$LLVM_INSTALL_DIR`, you can also build the project *out-of-tree* using the following command as template:
+
 ```shell
 cmake -GNinja -Bbuild \
   `# Enables "--debug" and "--debug-only" flags for the "torch-mlir-opt" tool` \
@@ -176,19 +133,39 @@ cmake -GNinja -Bbuild \
   -DLLVM_DIR="$LLVM_INSTALL_DIR/lib/cmake/llvm/"
   .
 ```
-The same QoL CMake flags can be used to enable clang, ccache, and lld. Be sure to have built LLVM with `-DLLVM_ENABLE_PROJECTS=mlir`.
 
-Be aware that the installed version of LLVM needs in general to match the committed version in `externals/llvm-project`. Using a different version may or may not work.
+- Be sure to have built LLVM with `-DLLVM_ENABLE_PROJECTS=mlir`.
+- Be aware that the installed version of LLVM needs in general to match the committed version in `externals/llvm-project`. Using a different version may or may not work.
 
 ###### [About MLIR debugging](https://mlir.llvm.org/getting_started/Debugging/)
 
-##### Options to run end-to-end tests
+##### (Optional) Flags for leveraging quicker builds
+
+If you anticipate needing to frequently rebuild LLVM, append:
+
+```shell
+  \
+  `# use clang`\
+  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  `# use ccache to cache build results` \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+  `# use LLD to link in seconds, rather than minutes` \
+  -DCMAKE_LINKER_TYPE=lld
+```
+
+- This requires [the enablement mentioned earlier](#optional-enable-quicker-builds).
+- If these flags cause issues, just skip them for now.
+
+##### (Optional) Flags for enabling end-to-end tests
 
 To enable local end-to-end tests, append:
 
 ```shell
+  \
   -DTORCH_MLIR_ENABLE_PYTORCH_EXTENSIONS=ON \
-  -DTORCH_MLIR_ENABLE_JIT_IR_IMPORTER=ON \
+  -DTORCH_MLIR_ENABLE_JIT_IR_IMPORTER=ON
 ```
 
 - NOTE: The JIT IR importer depends on the native PyTorch extension features and defaults to `ON` if not changed.

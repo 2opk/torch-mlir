@@ -76,11 +76,13 @@ static Value transposeValue(Location loc, Value value, ArrayRef<int64_t> perms,
   return transpose;
 }
 
-class ConvertAtenMmOp : public OpConversionPattern<AtenMmOp> {
+template <typename AtenMmLikeOp>
+class ConvertAtenMmLikeOp : public OpConversionPattern<AtenMmLikeOp> {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  using OpConversionPattern<AtenMmLikeOp>::OpConversionPattern;
+  using OpAdaptor = typename AtenMmLikeOp::Adaptor;
   LogicalResult
-  matchAndRewrite(AtenMmOp op, OpAdaptor adaptor,
+  matchAndRewrite(AtenMmLikeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     Value lhs = adaptor.getSelf();
@@ -104,7 +106,7 @@ public:
 
     if (lhsType.getRank() != 2 || rhsType.getRank() != 2) {
       return rewriter.notifyMatchFailure(
-          op, "expected both operands to aten.mm to be rank 2");
+          op, "expected both operands to mm-like op to be rank 2");
     }
 
     ValueTensorType lhsTorchType =
@@ -118,13 +120,13 @@ public:
 
     if (static_cast<bool>(lhsZeroPoint) != static_cast<bool>(rhsZeroPoint)) {
       return rewriter.notifyMatchFailure(
-          op, "unsupported: aten.mm with mixed quantization");
+          op, "unsupported: mm-like op with mixed quantization");
     }
 
     if (lhsTorchType.getDtype() != rhsTorchType.getDtype()) {
       if (!lhsZeroPoint) {
         return rewriter.notifyMatchFailure(
-            op, "unsupported: aten.mm with different input element types");
+            op, "unsupported: mm-like op with different input element types");
       }
       // Allows quantized types to mismatch since they will be cast to the same
       // type.
@@ -144,11 +146,11 @@ public:
       rewriter.create<cf::AssertOp>(
           loc, contractingDimEqual,
           rewriter.getStringAttr(
-              "mismatching contracting dimension for torch.aten.mm"));
+              "mismatching contracting dimension for torch mm-like op"));
     }
 
     TensorType resultType =
-        cast<TensorType>(getTypeConverter()->convertType(op.getType()));
+        cast<TensorType>(this->getTypeConverter()->convertType(op.getType()));
     Type elementType = resultType.getElementType();
     auto accumulatorDType =
         getDefaultAccType(rewriter, lhsType.getElementType());
@@ -160,13 +162,13 @@ public:
 
     Value matmul;
     if (lhsZeroPoint) {
-      lhsZeroPoint = typeConverter->materializeTargetConversion(
+      lhsZeroPoint = this->typeConverter->materializeTargetConversion(
           rewriter, loc,
-          getTypeConverter()->convertType(lhsZeroPoint.getType()),
+          this->getTypeConverter()->convertType(lhsZeroPoint.getType()),
           lhsZeroPoint);
-      rhsZeroPoint = typeConverter->materializeTargetConversion(
+      rhsZeroPoint = this->typeConverter->materializeTargetConversion(
           rewriter, loc,
-          getTypeConverter()->convertType(rhsZeroPoint.getType()),
+          this->getTypeConverter()->convertType(rhsZeroPoint.getType()),
           rhsZeroPoint);
       lhsZeroPoint = rewriter.create<arith::TruncIOp>(
           loc, rewriter.getI32Type(), lhsZeroPoint);
@@ -1775,7 +1777,9 @@ void mlir::torch::torch_to_linalg::populateLinearPatternsAndLegality(
     ConversionTarget &target) {
   MLIRContext *context = patterns.getContext();
   target.addIllegalOp<AtenMmOp>();
-  patterns.add<ConvertAtenMmOp>(typeConverter, context);
+  target.addIllegalOp<Aten_IntMmOp>();
+  patterns.add<ConvertAtenMmLikeOp<AtenMmOp>>(typeConverter, context);
+  patterns.add<ConvertAtenMmLikeOp<Aten_IntMmOp>>(typeConverter, context);
   target.addIllegalOp<AtenFlipOp>();
   patterns.add<ConvertAtenFlipOp>(typeConverter, context);
   target.addIllegalOp<AtenMatmulOp>();

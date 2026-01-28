@@ -2000,17 +2000,49 @@ LogicalResult ConvertAtenOp<AtenFmodTensorOp>::matchAndRewrite(
 }
 
 // AtenBitwiseLeftShiftTensorOp
+// Guards invalid shifts (negative or >= bitwidth) to return 0, matching PyTorch
+// CPU semantics. Without this, RISC-V masks shift amounts causing divergence.
 template <>
 LogicalResult ConvertAtenOp<AtenBitwiseLeftShiftTensorOp>::matchAndRewrite(
     AtenBitwiseLeftShiftTensorOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
   Value lhs = adaptor.getSelf();
   Value rhs = adaptor.getOther();
+  Location loc = op.getLoc();
 
   auto resultType =
       cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
+  auto elemType = cast<mlir::IntegerType>(resultType.getElementType());
+  int64_t bitwidth = elemType.getWidth();
+
   rhs = hlo::promoteAndBroadcast(rewriter, rhs, resultType, std::nullopt);
-  rewriter.replaceOpWithNewOp<stablehlo::ShiftLeftOp>(op, lhs, rhs);
+
+  auto zeroAttr = SplatElementsAttr::get(
+      resultType, llvm::APInt::getZero(bitwidth));
+  Value zeroTensor = rewriter.create<stablehlo::ConstantOp>(loc, resultType, zeroAttr);
+
+  auto bitwidthAttr = SplatElementsAttr::get(
+      resultType, llvm::APInt(bitwidth, bitwidth, /*isSigned=*/true));
+  Value bitwidthTensor = rewriter.create<stablehlo::ConstantOp>(loc, resultType, bitwidthAttr);
+
+  auto cmpTypeAttr = stablehlo::ComparisonTypeAttr::get(
+      rewriter.getContext(), stablehlo::ComparisonType::SIGNED);
+  auto i1Type = resultType.clone(rewriter.getI1Type());
+
+  auto ltDirectionAttr = stablehlo::ComparisonDirectionAttr::get(
+      rewriter.getContext(), stablehlo::ComparisonDirection::LT);
+  Value negativeShift = rewriter.create<stablehlo::CompareOp>(
+      loc, i1Type, rhs, zeroTensor, ltDirectionAttr, cmpTypeAttr);
+
+  auto geDirectionAttr = stablehlo::ComparisonDirectionAttr::get(
+      rewriter.getContext(), stablehlo::ComparisonDirection::GE);
+  Value tooLargeShift = rewriter.create<stablehlo::CompareOp>(
+      loc, i1Type, rhs, bitwidthTensor, geDirectionAttr, cmpTypeAttr);
+
+  Value invalidShift = rewriter.create<stablehlo::OrOp>(loc, negativeShift, tooLargeShift);
+  Value shifted = rewriter.create<stablehlo::ShiftLeftOp>(loc, lhs, rhs);
+
+  rewriter.replaceOpWithNewOp<stablehlo::SelectOp>(op, resultType, invalidShift, zeroTensor, shifted);
   return success();
 }
 

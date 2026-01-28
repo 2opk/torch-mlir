@@ -526,13 +526,17 @@ static Value createLinalgPayloadCalculationForElementwiseOp(
     Type dtype = cast<RankedTensorType>(
                      converter->convertType(bitwiseRightShiftTensor.getType()))
                      .getElementType();
-    if (!isa<mlir::IntegerType>(dtype)) {
+    auto intTy = dyn_cast<mlir::IntegerType>(dtype);
+    if (!intTy) {
       bitwiseRightShiftTensor.emitError(
           "Bitwise_Right_Shift op does not support non-integer input dtype.");
       return nullptr;
     }
     Value lhs = convertScalarToDtype(b, loc, payloadArgs[0], dtype);
     Value rhs = convertScalarToDtype(b, loc, payloadArgs[1], dtype);
+    if (intTy.isUnsigned()) {
+      return b.create<arith::ShRUIOp>(loc, lhs, rhs);
+    }
     return b.create<arith::ShRSIOp>(loc, lhs, rhs);
   }
   if (auto bitwiseLeftShiftTensor =
@@ -547,7 +551,28 @@ static Value createLinalgPayloadCalculationForElementwiseOp(
     }
     Value lhs = convertScalarToDtype(b, loc, payloadArgs[0], dtype);
     Value rhs = convertScalarToDtype(b, loc, payloadArgs[1], dtype);
-    return b.create<arith::ShLIOp>(loc, lhs, rhs);
+
+    // Guard invalid shifts (negative or >= bitwidth) to return 0, matching
+    // PyTorch CPU semantics. Without this, RISC-V masks shift amounts causing
+    // divergence from x86 behavior.
+    auto intTy = cast<mlir::IntegerType>(dtype);
+    int64_t bitwidth = intTy.getWidth();
+    Value zero = b.create<arith::ConstantOp>(loc, b.getIntegerAttr(dtype, 0));
+    Value bitwidthVal =
+        b.create<arith::ConstantOp>(loc, b.getIntegerAttr(dtype, bitwidth));
+
+    // Check rhs < 0 (negative shift)
+    Value negativeShift = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                   rhs, zero);
+    // Check rhs >= bitwidth (too large)
+    Value tooLargeShift = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+                                                   rhs, bitwidthVal);
+    // invalid = (rhs < 0) || (rhs >= bitwidth)
+    Value invalidShift = b.create<arith::OrIOp>(loc, negativeShift, tooLargeShift);
+
+    Value shifted = b.create<arith::ShLIOp>(loc, lhs, rhs);
+    // Select: if invalid, return 0; otherwise return shifted value
+    return b.create<arith::SelectOp>(loc, invalidShift, zero, shifted);
   }
   if (isa<AtenLogicalOrOp, AtenLogicalAndOp, AtenLogicalXorOp>(op)) {
     MLIRContext *context = op->getContext();
@@ -880,6 +905,13 @@ static Value createLinalgPayloadCalculationForElementwiseOp(
         convertScalarToDtype(b, loc, operands[1], dtype,
                              /*srcOriginalDtype=*/operands[1].getType(),
                              /*dstOriginalDtype=*/dtype);
+    Type originalDtype = cast<BaseTensorType>(rshiftScalar.getType()).getDtype();
+    if (auto intTy = dyn_cast<mlir::IntegerType>(originalDtype)) {
+      if (intTy.isUnsigned()) {
+        return b.create<arith::ShRUIOp>(loc, self, other);
+      }
+      return b.create<arith::ShRSIOp>(loc, self, other);
+    }
     return b.create<arith::ShRUIOp>(loc, self, other);
   }
   if (auto subScalar = dyn_cast<AtenSubScalarOp>(op)) {

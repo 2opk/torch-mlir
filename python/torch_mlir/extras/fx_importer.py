@@ -866,16 +866,18 @@ class FxImporter:
                         "Could not find state mapping for tensor constants"
                     ) from e
                 arg_replacements[input_name] = state_value
-        else:
-            # Lift buffers.
-            for input_name, state_name in sig.inputs_to_buffers.items():
-                try:
-                    state_value = state_dict[state_name]
-                except KeyError as e:
-                    raise AssertionError(
-                        "Could not find state mapping for buffer"
-                    ) from e
-                arg_replacements[input_name] = state_value
+
+        # Lift buffers (always process, not just when constants is missing).
+        for input_name, state_name in sig.inputs_to_buffers.items():
+            if input_name in arg_replacements:
+                continue  # Already handled via constants
+            try:
+                state_value = state_dict[state_name]
+            except KeyError as e:
+                raise AssertionError(
+                    "Could not find state mapping for buffer"
+                ) from e
+            arg_replacements[input_name] = state_value
 
         # Lift parameters.
         for input_name, state_name in sig.inputs_to_parameters.items():

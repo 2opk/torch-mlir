@@ -234,6 +234,34 @@ private:
   DenseMap<StringAttr, SmallVector<HandlerFn, 1>> namedHandlers;
 };
 
+// Helper: decompose bitwise_*_shift.Scalar_Tensor(scalar, tensor) into
+// NumToTensor(scalar) + bitwise_*_shift.Tensor(tensor0d, tensor).
+template <typename TensorOpT>
+static LogicalResult
+decomposeScalarTensorShift(Torch::OperatorOp op,
+                           ConversionPatternRewriter &rewriter) {
+  if (op->getNumOperands() != 2 || op->getNumResults() != 1)
+    return failure();
+
+  Value scalar = op->getOperand(0);
+  Value tensor = op->getOperand(1);
+  Location loc = op->getLoc();
+
+  // Determine the element type from the result tensor type.
+  auto resultTy = cast<ValueTensorType>(op->getResult(0).getType());
+  auto scalarTensorTy =
+      ValueTensorType::get(op->getContext(), ArrayRef<int64_t>{},
+                           resultTy.getDtype());
+
+  // scalar -> rank-0 tensor
+  Value scalarTensor =
+      rewriter.create<PrimNumToTensorScalarOp>(loc, scalarTensorTy, scalar);
+
+  // bitwise_*_shift.Tensor(rank0_tensor, tensor)
+  rewriter.replaceOpWithNewOp<TensorOpT>(op, resultTy, scalarTensor, tensor);
+  return success();
+}
+
 void TorchMatchSpecializedBackendOp::populateSpecializedConversions(
     TorchMatchSpecializedBackendOp &matcher) {
   matcher.populate(
@@ -259,6 +287,14 @@ void TorchMatchSpecializedBackendOp::populateSpecializedConversions(
         }
         return failure();
       });
+
+  // Decompose bitwise_{left,right}_shift.Scalar_Tensor → Tensor variant
+  matcher.populate(
+      "torch.aten.bitwise_left_shift.Scalar_Tensor",
+      decomposeScalarTensorShift<AtenBitwiseLeftShiftTensorOp>);
+  matcher.populate(
+      "torch.aten.bitwise_right_shift.Scalar_Tensor",
+      decomposeScalarTensorShift<AtenBitwiseRightShiftTensorOp>);
 }
 
 bool isSpecializedOperation(Torch::OperatorOp op) { return true; }

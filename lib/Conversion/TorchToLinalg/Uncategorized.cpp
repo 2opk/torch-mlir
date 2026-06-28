@@ -297,15 +297,11 @@ Value createDivModePayload(OpBuilder &b, Location loc,
     // floor division in Python (the // operator)
     if (isa<mlir::FloatType>(dtype))
       return b.create<math::FloorOp>(loc, quotient);
-    if (!dtype.isUnsignedInteger()) {
-      Type defaultIntToFloatType = b.getF64Type();
-      lhs = convertScalarToDtype(b, loc, lhs, defaultIntToFloatType);
-      rhs = convertScalarToDtype(b, loc, rhs, defaultIntToFloatType);
-      quotient = b.create<arith::DivFOp>(loc, lhs, rhs);
-      Value floor = b.create<math::FloorOp>(loc, quotient);
-      Value convert = convertScalarToDtype(b, loc, floor, dtype);
-      return convert;
-    }
+    if (!dtype.isUnsignedInteger())
+      // Signed integer floor division lowers directly to arith.floordivsi
+      // (rounds toward -inf) instead of a int->f64->divf->floor->int round
+      // trip. Keeps the op in the integer domain for the RVV target.
+      return b.create<arith::FloorDivSIOp>(loc, lhs, rhs);
   }
   return quotient;
 }
